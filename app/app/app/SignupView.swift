@@ -24,7 +24,9 @@ struct SignupView: View {
                             
                             Spacer()
                             
-                            Button(action: {}) {
+                            Button(action: {
+                                showSignup = false
+                            }) {
                                 Image(systemName: "xmark.circle.fill")
                                     .foregroundColor(.white.opacity(0.8))
                             }
