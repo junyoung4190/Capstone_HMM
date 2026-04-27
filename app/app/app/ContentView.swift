@@ -1,11 +1,22 @@
-    import SwiftUI
+import SwiftUI
+import PhotosUI
 
-    struct MainView: View {
-        @State private var showSignup = false
-        @State private var showLogin = false
-        
-        var body: some View {
+struct MainView: View {
+    @State private var showSignup = false
+    @State private var showLogin = false
+    @State private var selectedItem: PhotosPickerItem?
+    @State private var selectedImage: UIImage?
+    @State private var goLoading = false
+    
+    var body: some View {
+        NavigationStack {
             ZStack {
+                NavigationLink("", isActive: $goLoading) {
+                    if let image = selectedImage {
+                        ResultLoadingView(image: image)
+                    }
+                }
+                .opacity(0)
                 
                 VStack(spacing: 20) {
                     Text("딥페이크 노이즈")
@@ -29,24 +40,22 @@
                             .padding(.horizontal, 40)
                     }
                     
-                    Button(action: {
-                                        print("사진 선택")
-                                    }) {
-                                        Text("사진 선택하기")
-                                            .foregroundColor(.white)
-                                            .frame(maxWidth: .infinity)
-                                            .padding()
-                                            .background(Color.blue)
-                                            .cornerRadius(10)
-                                            .padding(.horizontal, 40)
-                                    }
-                                    
-                                    VStack(spacing: 15) {
-                                        FeatureCard(icon: "sparkles", title: "자동 노이즈 적용", description: "업로드하면 즉시 딥페이크 노이즈 효과가 적용됩니다")
-                                        FeatureCard(icon: "arrow.down.circle", title: "쉬운 저장 및 공유", description: "처리된 이미지를 바로 저장하거나 공유")
-                                    }
-                                    .padding(.horizontal, 20)
-                                    
+                    PhotosPicker(selection: $selectedItem, matching: .images) {
+                        Text("사진 선택하기")
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.blue)
+                            .cornerRadius(10)
+                            .padding(.horizontal, 40)
+                    }
+                    
+                    VStack(spacing: 15) {
+                        FeatureCard(icon: "sparkles", title: "자동 노이즈 적용", description: "업로드하면 즉시 딥페이크 노이즈 효과가 적용됩니다")
+                        FeatureCard(icon: "arrow.down.circle", title: "쉬운 저장 및 공유", description: "처리된 이미지를 바로 저장하거나 공유")
+                    }
+                    .padding(.horizontal, 20)
+                    
                     Spacer()
                     
                     Button {
@@ -81,20 +90,33 @@
                     LoginView(showLogin: $showLogin, showSignup: $showSignup)
                         .transition(.move(edge: .bottom))
                 }
-                    
+                
                 if showSignup {
                     SignupView(showSignup: $showSignup, showLogin: $showLogin)
                         .transition(.move(edge: .bottom))
                 }
             }
+            
+            .onChange(of: selectedItem) { newItem in
+                Task {
+                    if let data = try? await newItem?.loadTransferable(type: Data.self),
+                       let uiImage = UIImage(data: data) {
+                        
+                        selectedImage = uiImage
+                        goLoading = true   // 👉 여기 핵심
+                    }
+                }
+            }
+            
         }
     }
+}
 
-    struct MainView_Previews: PreviewProvider {
-        static var previews: some View {
-            MainView()
-        }
+struct MainView_Previews: PreviewProvider {
+    static var previews: some View {
+        MainView()
     }
+}
 
 struct FeatureCard: View {
     var icon: String
