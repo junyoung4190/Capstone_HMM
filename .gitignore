@@ -1,8 +1,9 @@
-myenv/
 __pycache__/
 *.pyc
+*.pyo
+myenv/
 .env
-.DS_Store
+uploads/
 protected/
 
 # Created by https://www.toptal.com/developers/gitignore/api/xcode,swift
