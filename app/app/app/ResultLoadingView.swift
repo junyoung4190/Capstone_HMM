@@ -50,8 +50,10 @@ struct ResultLoadingView: View {
                 if let res = res {
                     print("✅ 성공: \(res)")
                     self.result = res
-                    self.goNext = true  // ✅ result 설정 후 이동
-                    
+                    // ✅ 약간의 딜레이 추가
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        self.goNext = true
+                    }
                 } else {
                     print("❌ 실패: res가 nil")
                     self.isError = true
