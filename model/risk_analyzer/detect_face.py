@@ -1,7 +1,8 @@
+import os                                                       
 import cv2
 from ultralytics import YOLO
 
-face_model = YOLO('/workspace/capstone_pipeline/weights/yolov8n-face.pt')
+face_model = YOLO(os.environ.get("YOLO_WEIGHTS_PATH", "weights/yolov8n-face.pt"))   
 
 def detect_face(image_path):
     img = cv2.imread(image_path)
