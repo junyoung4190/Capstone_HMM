@@ -2,62 +2,50 @@ import SwiftUI
 
 struct ResultLoadingView: View {
     let image: UIImage
-    
+    @Environment(\.dismiss) private var dismiss
+
     @State private var result: ImageResponse?
-    @State private var goNext = false
     @State private var isLoading = true
     @State private var isError = false
-    
+
     var body: some View {
-        VStack(spacing: 20) {
-            
-            if isLoading {
-                Text("AI 분석 중...")
-                    .font(.title2)
-                ProgressView()
-            }
-            
-            if isError {
-                Text("업로드 실패 😢")
-                    .foregroundColor(.red)
-                Button("다시 시도") {
-                    upload()
-                }
-            }
-            
-            // ✅ result가 있을 때만 NavigationLink 활성화
-            NavigationLink("", isActive: $goNext) {
-                if let result = result {
-                    ResultView(result: result)
-                } else {
-                    EmptyView()
+        Group {
+            if let result = result {
+                ResultView(result: result, onDismiss: { dismiss() })
+                    .navigationBarHidden(true)
+            } else {
+                VStack(spacing: 20) {
+                    if isLoading {
+                        Text("AI 분석 중...")
+                            .font(.title2)
+                        ProgressView()
+                    }
+                    if isError {
+                        Text("업로드 실패 😢")
+                            .foregroundColor(.red)
+                        Button("다시 시도") {
+                            upload()
+                        }
+                    }
                 }
             }
         }
-        .onAppear {
-            upload()
-        }
+        .navigationBarHidden(true)
+        .onAppear { upload() }
     }
-    
+
     func upload() {
         isLoading = true
         isError = false
-        
+
         uploadImage(image: image) { res in
-            DispatchQueue.main.async {
-                isLoading = false
-                
-                if let res = res {
-                    print("✅ 성공: \(res)")
-                    self.result = res
-                    // ✅ 약간의 딜레이 추가
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        self.goNext = true
-                    }
-                } else {
-                    print("❌ 실패: res가 nil")
-                    self.isError = true
-                }
+            isLoading = false
+            if let res = res {
+                print("✅ 성공: \(res)")
+                self.result = res
+            } else {
+                print("❌ 실패: res가 nil")
+                self.isError = true
             }
         }
     }

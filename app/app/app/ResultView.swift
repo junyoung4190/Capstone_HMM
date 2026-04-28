@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ResultView: View {
     let result: ImageResponse
+    let onDismiss: () -> Void
 
     @State private var showShare = false
     @State private var shareImage: UIImage?
@@ -26,7 +27,7 @@ struct ResultView: View {
             .padding(.horizontal)
 
             Button {
-                dismiss()
+                onDismiss()
             } label: {
                 HStack {
                     Image(systemName: "arrow.clockwise")
@@ -103,11 +104,4 @@ struct ResultView: View {
             }
         }.resume()
     }
-}
-
-#Preview {
-    ResultView(result: ImageResponse(
-        imageId: 1,
-        resultUrl: "https://picsum.photos/200"
-    ))
 }
