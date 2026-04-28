@@ -15,6 +15,8 @@ struct MainView: View {
                 NavigationLink("", isActive: $goLoading) {
                     if let image = selectedImage {
                         ResultLoadingView(image: image)
+                    } else {
+                        EmptyView()
                     }
                 }
                 .opacity(0)
@@ -110,9 +112,10 @@ struct MainView: View {
                 Task {
                     if let data = try? await newItem?.loadTransferable(type: Data.self),
                        let uiImage = UIImage(data: data) {
-                        
-                        selectedImage = uiImage
-                        goLoading = true   // 👉 여기 핵심
+                        await MainActor.run {
+                            selectedImage = uiImage  
+                            goLoading = true
+                        }
                     }
                 }
             }

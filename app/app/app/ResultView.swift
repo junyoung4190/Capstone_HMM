@@ -194,6 +194,7 @@ struct ResultView: View {
     }
 }
 
+
 #Preview {
     ResultView(result: ImageResponse(
         imageId: 1,
@@ -202,3 +203,4 @@ struct ResultView: View {
         riskScore: 0.72
     ))
 }
+
