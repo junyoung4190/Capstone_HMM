@@ -13,9 +13,7 @@ struct MainView: View {
         NavigationStack {
             ZStack {
                 NavigationLink("", isActive: $goLoading) {
-                    if let image = selectedImage {
-                        ResultLoadingView(image: image)
-                    }
+                    ResultLoadingView(image: selectedImage ?? UIImage())
                 }
                 .opacity(0)
                 
@@ -112,7 +110,9 @@ struct MainView: View {
                        let uiImage = UIImage(data: data) {
                         
                         selectedImage = uiImage
-                        goLoading = true   // 👉 여기 핵심
+                        await MainActor.run {
+                            goLoading = true
+                        }
                     }
                 }
             }
