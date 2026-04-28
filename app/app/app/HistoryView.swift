@@ -4,17 +4,15 @@ import SwiftUI
 struct HistoryItem: Identifiable, Codable {
     let id: UUID
     let date: Date
-    let originalImageData: Data
     let processedImageData: Data
 
-    init(id: UUID = UUID(), date: Date = Date(), originalImageData: Data, processedImageData: Data) {
+    init(id: UUID = UUID(), date: Date = Date(), processedImageData: Data) {
         self.id = id
         self.date = date
-        self.originalImageData = originalImageData
         self.processedImageData = processedImageData
     }
 }
-
+    
 // MARK: - 이력 저장소 (싱글톤)
 class HistoryStore: ObservableObject {
     static let shared = HistoryStore()
@@ -25,10 +23,9 @@ class HistoryStore: ObservableObject {
 
     private init() { load() }
 
-    func add(original: UIImage, processed: UIImage) {
-        guard let origData = original.jpegData(compressionQuality: 0.8),
-              let procData = processed.jpegData(compressionQuality: 0.8) else { return }
-        let item = HistoryItem(originalImageData: origData, processedImageData: procData)
+    func add(processed: UIImage) {
+        guard let procData = processed.jpegData(compressionQuality: 0.8) else { return }
+        let item = HistoryItem(processedImageData: procData)
         items.insert(item, at: 0)
         save()
     }
