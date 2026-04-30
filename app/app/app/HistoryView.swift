@@ -26,13 +26,23 @@ class HistoryStore: ObservableObject {
     func add(processed: UIImage) {
         guard let procData = processed.jpegData(compressionQuality: 0.8) else { return }
         let item = HistoryItem(processedImageData: procData)
-        items.insert(item, at: 0)
-        save()
+        DispatchQueue.main.async {
+            self.items.insert(item, at: 0)
+            let snapshot = self.items
+            DispatchQueue.global(qos: .background).async {
+                if let encoded = try? JSONEncoder().encode(snapshot) {
+                    UserDefaults.standard.set(encoded, forKey: self.saveKey)
+                }
+            }
+        }
     }
 
     private func save() {
-        if let encoded = try? JSONEncoder().encode(items) {
-            UserDefaults.standard.set(encoded, forKey: saveKey)
+        let snapshot = items
+        DispatchQueue.global(qos: .background).async {
+            if let encoded = try? JSONEncoder().encode(snapshot) {
+                UserDefaults.standard.set(encoded, forKey: self.saveKey)
+            }
         }
     }
 

@@ -126,12 +126,13 @@ struct ResultView: View {
     func loadAndSaveImage() {
         guard let url = URL(string: result.resultUrl) else { return }
         URLSession.shared.dataTask(with: url) { data, _, _ in
-            if let data = data, let img = UIImage(data: data) {
-                DispatchQueue.main.async {
-                    UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil)
-                    // ✅ 이력관리에 필터 이미지만 저장
-                    HistoryStore.shared.add(processed: img)
-                }
+            guard let data = data, let img = UIImage(data: data) else { return }
+            DispatchQueue.main.async {
+                UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil)
+            }
+            // 이력 저장은 백그라운드에서 별도로
+            DispatchQueue.global(qos: .background).async {
+                HistoryStore.shared.add(processed: img)
             }
         }.resume()
     }
