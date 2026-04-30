@@ -7,6 +7,7 @@ struct ResultView: View {
 
     @State private var showShare = false
     @State private var shareImage: UIImage?
+    @State private var savedToPhotos = false
 
     var body: some View {
         ScrollView {
@@ -47,7 +48,6 @@ struct ResultView: View {
                 }
                 .padding(.horizontal)
 
-                // 필터 적용 이미지 크게 보기
                 AsyncImage(url: URL(string: result.resultUrl)) { img in
                     img.resizable()
                         .scaledToFit()
@@ -90,12 +90,12 @@ struct ResultView: View {
                         loadAndSaveImage()
                     } label: {
                         HStack {
-                            Image(systemName: "arrow.down")
-                            Text("저장")
+                            Image(systemName: savedToPhotos ? "checkmark" : "arrow.down")
+                            Text(savedToPhotos ? "저장됨" : "저장")
                         }
                         .frame(maxWidth: .infinity)
                         .padding()
-                        .background(Color.black)
+                        .background(savedToPhotos ? Color.green : Color.black)
                         .foregroundColor(.white)
                         .cornerRadius(12)
                     }
@@ -126,12 +126,14 @@ struct ResultView: View {
     func loadAndSaveImage() {
         guard let url = URL(string: result.resultUrl) else { return }
         URLSession.shared.dataTask(with: url) { data, _, _ in
-            if let data = data, let img = UIImage(data: data) {
-                DispatchQueue.main.async {
-                    UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil)
-                    // ✅ 이력관리에 필터 이미지만 저장
-                    HistoryStore.shared.add(processed: img)
-                }
+            guard let data = data, let img = UIImage(data: data) else { return }
+            DispatchQueue.main.async {
+                UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil)
+                withAnimation { self.savedToPhotos = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.savedToPhotos = false }
+            }
+            DispatchQueue.global(qos: .background).async {
+                HistoryStore.shared.add(processed: img)
             }
         }.resume()
     }

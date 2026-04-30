@@ -164,7 +164,7 @@ struct MainView: View {
                 }
             }
             .sheet(isPresented: $showHistory) {
-                HistoryView()
+                HistoryView(isLoggedIn: $isLoggedIn)
                     .environmentObject(HistoryStore.shared)
             }
         }

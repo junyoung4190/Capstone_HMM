@@ -19,20 +19,60 @@ class HistoryStore: ObservableObject {
 
     @Published var items: [HistoryItem] = []
 
-    private let saveKey = "deepfake_history"
+    private var saveKey: String {
+        let email = UserDefaults.standard.string(forKey: "current_user_email") ?? "guest"
+        return "deepfake_history_\(email)"
+    }
 
     private init() { load() }
+
+    func loadForUser(email: String?) {
+        let key = email.map { "deepfake_history_\($0)" } ?? "deepfake_history_guest"
+        DispatchQueue.main.async {
+            if let data = UserDefaults.standard.data(forKey: key),
+               let decoded = try? JSONDecoder().decode([HistoryItem].self, from: data) {
+                self.items = decoded
+            } else {
+                self.items = []
+            }
+        }
+    }
+
+    func delete(item: HistoryItem) {
+        DispatchQueue.main.async {
+            self.items.removeAll { $0.id == item.id }
+            let snapshot = self.items
+            let key = self.saveKey
+            DispatchQueue.global(qos: .background).async {
+                if let encoded = try? JSONEncoder().encode(snapshot) {
+                    UserDefaults.standard.set(encoded, forKey: key)
+                }
+            }
+        }
+    }
 
     func add(processed: UIImage) {
         guard let procData = processed.jpegData(compressionQuality: 0.8) else { return }
         let item = HistoryItem(processedImageData: procData)
-        items.insert(item, at: 0)
-        save()
+        DispatchQueue.main.async {
+            self.items.insert(item, at: 0)
+            let snapshot = self.items
+            let key = self.saveKey
+            DispatchQueue.global(qos: .background).async {
+                if let encoded = try? JSONEncoder().encode(snapshot) {
+                    UserDefaults.standard.set(encoded, forKey: key)
+                }
+            }
+        }
     }
 
     private func save() {
-        if let encoded = try? JSONEncoder().encode(items) {
-            UserDefaults.standard.set(encoded, forKey: saveKey)
+        let snapshot = items
+        let key = saveKey
+        DispatchQueue.global(qos: .background).async {
+            if let encoded = try? JSONEncoder().encode(snapshot) {
+                UserDefaults.standard.set(encoded, forKey: key)
+            }
         }
     }
 
@@ -48,8 +88,10 @@ class HistoryStore: ObservableObject {
 struct HistoryView: View {
     @EnvironmentObject private var store: HistoryStore
     @Environment(\.dismiss) private var dismiss
+    @Binding var isLoggedIn: Bool
 
     @State private var selectedItem: HistoryItem? = nil
+    @State private var showLogoutAlert = false
 
     var body: some View {
         NavigationStack {
@@ -75,6 +117,18 @@ struct HistoryView: View {
             .sheet(item: $selectedItem) { item in
                 HistoryDetailView(item: item)
                     .environmentObject(store)
+            }
+            .alert("로그아웃", isPresented: $showLogoutAlert) {
+                Button("로그아웃", role: .destructive) {
+                    UserDefaults.standard.removeObject(forKey: "jwt_token")
+                    UserDefaults.standard.removeObject(forKey: "current_user_email")
+                    store.loadForUser(email: nil)
+                    isLoggedIn = false
+                    dismiss()
+                }
+                Button("취소", role: .cancel) {}
+            } message: {
+                Text("로그아웃 하시겠습니까?")
             }
         }
     }
@@ -105,9 +159,11 @@ struct HistoryView: View {
 
                 Spacer()
 
-                Image(systemName: "xmark.circle.fill")
-                    .font(.title2)
-                    .foregroundColor(.clear)
+                Button { showLogoutAlert = true } label: {
+                    Image(systemName: "rectangle.portrait.and.arrow.right")
+                        .font(.title2)
+                        .foregroundColor(.white.opacity(0.8))
+                }
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 16)
@@ -179,9 +235,11 @@ struct HistoryCard: View {
 // MARK: - 이력 상세 뷰
 struct HistoryDetailView: View {
     let item: HistoryItem
+    @EnvironmentObject private var store: HistoryStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var savedToPhotos = false
+    @State private var showDeleteAlert = false
 
     private var processedImage: UIImage? { UIImage(data: item.processedImageData) }
 
@@ -229,6 +287,21 @@ struct HistoryDetailView: View {
                 }
                 .padding(.horizontal)
 
+                // 삭제 버튼
+                Button { showDeleteAlert = true } label: {
+                    HStack {
+                        Image(systemName: "trash")
+                        Text("이력 삭제")
+                    }
+                    .font(.subheadline.bold())
+                    .foregroundColor(.red)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.red.opacity(0.1))
+                    .cornerRadius(10)
+                }
+                .padding(.horizontal)
+
                 Spacer()
             }
             .padding(.top, 16)
@@ -238,6 +311,15 @@ struct HistoryDetailView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("닫기") { dismiss() }
                 }
+            }
+            .alert("이력 삭제", isPresented: $showDeleteAlert) {
+                Button("삭제", role: .destructive) {
+                    store.delete(item: item)
+                    dismiss()
+                }
+                Button("취소", role: .cancel) {}
+            } message: {
+                Text("이 이미지를 이력에서 삭제하시겠습니까?")
             }
         }
     }
@@ -252,6 +334,6 @@ struct HistoryDetailView: View {
 
 // MARK: - Preview
 #Preview {
-    HistoryView()
+    HistoryView(isLoggedIn: .constant(true))
         .environmentObject(HistoryStore.shared)
 }
