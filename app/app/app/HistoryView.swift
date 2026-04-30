@@ -26,7 +26,6 @@ class HistoryStore: ObservableObject {
 
     private init() { load() }
 
-    // 로그인/로그아웃 시 해당 유저의 이력으로 교체
     func loadForUser(email: String?) {
         let key = email.map { "deepfake_history_\($0)" } ?? "deepfake_history_guest"
         DispatchQueue.main.async {
@@ -35,6 +34,19 @@ class HistoryStore: ObservableObject {
                 self.items = decoded
             } else {
                 self.items = []
+            }
+        }
+    }
+
+    func delete(item: HistoryItem) {
+        DispatchQueue.main.async {
+            self.items.removeAll { $0.id == item.id }
+            let snapshot = self.items
+            let key = self.saveKey
+            DispatchQueue.global(qos: .background).async {
+                if let encoded = try? JSONEncoder().encode(snapshot) {
+                    UserDefaults.standard.set(encoded, forKey: key)
+                }
             }
         }
     }
@@ -223,9 +235,11 @@ struct HistoryCard: View {
 // MARK: - 이력 상세 뷰
 struct HistoryDetailView: View {
     let item: HistoryItem
+    @EnvironmentObject private var store: HistoryStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var savedToPhotos = false
+    @State private var showDeleteAlert = false
 
     private var processedImage: UIImage? { UIImage(data: item.processedImageData) }
 
@@ -273,6 +287,21 @@ struct HistoryDetailView: View {
                 }
                 .padding(.horizontal)
 
+                // 삭제 버튼
+                Button { showDeleteAlert = true } label: {
+                    HStack {
+                        Image(systemName: "trash")
+                        Text("이력 삭제")
+                    }
+                    .font(.subheadline.bold())
+                    .foregroundColor(.red)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.red.opacity(0.1))
+                    .cornerRadius(10)
+                }
+                .padding(.horizontal)
+
                 Spacer()
             }
             .padding(.top, 16)
@@ -282,6 +311,15 @@ struct HistoryDetailView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("닫기") { dismiss() }
                 }
+            }
+            .alert("이력 삭제", isPresented: $showDeleteAlert) {
+                Button("삭제", role: .destructive) {
+                    store.delete(item: item)
+                    dismiss()
+                }
+                Button("취소", role: .cancel) {}
+            } message: {
+                Text("이 이미지를 이력에서 삭제하시겠습니까?")
             }
         }
     }
