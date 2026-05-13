@@ -1,0 +1,22 @@
+# Cache
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Model files (download separately)
+*.dat
+*.pt
+*.pth
+*.bin
+*.tar
+*.onnx
+*.safetensors
+
+# Results
+results/
+*.png
+pipeline_test_output.png
+
+# Local
+.DS_Store
+*.log
