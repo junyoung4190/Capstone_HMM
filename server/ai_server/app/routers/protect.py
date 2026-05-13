@@ -1,6 +1,6 @@
 import io
 
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
 from app.services.file_service import validate_and_read
@@ -12,9 +12,12 @@ router = APIRouter(tags=["protect"])
 @router.post("/protect")
 async def protect(file: UploadFile = File(...)):
     contents = await validate_and_read(file)
-    protected = protect_image(contents)
+    try:
+        protected = protect_image(contents)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
     return StreamingResponse(
         io.BytesIO(protected),
-        media_type=file.content_type,
+        media_type="image/png",
         headers={"Content-Disposition": f'attachment; filename="protected_{file.filename}"'},
     )
