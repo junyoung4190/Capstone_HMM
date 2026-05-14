@@ -27,6 +27,29 @@ services:
     ports:
       - "8000:8000"
 
+    # NVIDIA GPU 지원 (RunPod / GPU 서버용)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    environment:
+      FACESHIELD_DIR: /app/model/faceshield
+      UNET_CONFIG: /app/model/faceshield/utils/unet/unet_config15.json
+      IP_ADAPTER_PATH: /app/model/faceshield/models/ip-adapter_sd15.bin
+      ARCFACE50_PATH: /app/model/faceshield/models/arcface_50.pth
+      ARCFACE100_PATH: /app/model/faceshield/models/arcface_100.pth
+      LANDMARK_PATH: /app/model/faceshield/models/shape_predictor_68_face_landmarks.dat
+      HF_HOME: /app/model/hf_cache
+      TRANSFORMERS_CACHE: /app/model/hf_cache
+
     volumes:
       - ./server/ai_server/uploads:/app/uploads
       - ./server/ai_server/protected:/app/protected
+      # 대용량 모델 가중치 (gitignore된 파일들) 마운트
+      - ./model/faceshield/models:/app/model/faceshield/models
+      # HuggingFace 모델 캐시 (SD 1.5, IP-Adapter 등)
+      - ./model/hf_cache:/app/model/hf_cache

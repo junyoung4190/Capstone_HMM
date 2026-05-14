@@ -1,7 +1,10 @@
+import os
 import cv2
 from sixdrepnet import SixDRepNet
 
-pose_model = SixDRepNet(gpu_id=0)
+# GPU_ID=0  → CUDA (서버/Docker)
+# GPU_ID=-1 → CPU  (로컬 맥, 기본값)
+pose_model = SixDRepNet(gpu_id=int(os.environ.get("GPU_ID", "-1")))
 
 def get_head_pose(face_crop):
     if face_crop is None:

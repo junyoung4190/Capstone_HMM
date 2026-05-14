@@ -3,3 +3,17 @@ uvicorn==0.44.0
 python-multipart==0.0.26
 ultralytics
 opencv-python-headless
+
+# FaceShield 의존성
+transformers>=4.30.0
+diffusers>=0.18.0
+omegaconf>=2.3.0
+tqdm>=4.64.0
+scipy>=1.9.0
+imutils>=0.5.4
+insightface>=0.7.3
+onnxruntime>=1.13.0
+torch-mtcnn
+safetensors>=0.3.0
+Pillow>=9.4.0
+accelerate>=0.20.0
