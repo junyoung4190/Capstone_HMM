@@ -61,6 +61,11 @@ public class ImageController {
         return ResponseEntity.ok(imageService.getMyImages(userId));
     }
 
+    @PostMapping("/{imageId}/protect")
+    public ResponseEntity<ImageResponse> protect(@PathVariable Long imageId) {
+        return ResponseEntity.ok(imageService.protectImage(imageId));
+    }
+
     @GetMapping("/{imageId}")
     public ResponseEntity<ImageResponse> getImageResult(@PathVariable Long imageId) {
         return ResponseEntity.ok(imageService.getImageResult(imageId));

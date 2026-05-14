@@ -148,6 +148,42 @@ public class ImageService {
                 .collect(Collectors.toList());
     }
 
+    public ImageResponse protectImage(Long imageId) {
+
+        Image image = imageRepository.findById(imageId)
+                .orElseThrow(() -> new RuntimeException("이미지 없음"));
+
+        try {
+            String uploadDir = System.getProperty("user.dir") + "/uploads/";
+            byte[] fileBytes = Files.readAllBytes(
+                    new File(uploadDir + image.getFilePath()).toPath()
+            );
+
+            byte[] protectedBytes = faceShieldClient.protect(fileBytes, image.getFileName());
+
+            String savedName = saveFile(protectedBytes, "protected_" + image.getFileName());
+            image.setResultPath(savedName);
+            image.setStatus(ImageStatus.COMPLETED);
+            imageRepository.save(image);
+
+            return new ImageResponse(
+                    image.getId(),
+                    image.getFileName(),
+                    "http://localhost:8080/view/" + image.getFilePath(),
+                    image.getStatus().name(),
+                    image.getRiskScore(),
+                    "http://localhost:8080/view/" + savedName,
+                    null
+            );
+
+        } catch (Exception e) {
+            image.setStatus(ImageStatus.FAILED);
+            image.setErrorMessage(e.getMessage());
+            imageRepository.save(image);
+            throw new RuntimeException("보호 처리 실패: " + e.getMessage());
+        }
+    }
+
     public ImageResponse getImageResult(Long imageId) {
 
         Image img = imageRepository.findById(imageId)

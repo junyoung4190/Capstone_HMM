@@ -35,17 +35,19 @@ public class SecurityConfig {
                         // 회원가입 / 로그인 허용
                         .requestMatchers("/api/users/**").permitAll()
 
-                        // 이미지 업로드 허용
+                        // 이미지 업로드 / 분석 / 보호 허용
                         .requestMatchers(
                                 HttpMethod.POST,
                                 "/api/images/upload",
-                                "/api/images/analyze"
+                                "/api/images/analyze",
+                                "/api/images/*/protect"
                         ).permitAll()
 
-                        // 이미지 조회 허용
+                        // 이미지 조회 및 파일 서빙 허용
                         .requestMatchers(
                                 HttpMethod.GET,
-                                "/api/images/**"
+                                "/api/images/**",
+                                "/view/**"
                         ).permitAll()
 
                         // 나머지 인증 필요
