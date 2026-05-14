@@ -56,4 +56,38 @@ public class FaceShieldClient {
 
         return response.getBody();
     }
+
+    public byte[] protect(byte[] fileBytes, String originalName) {
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+
+        ByteArrayResource fileResource =
+                new ByteArrayResource(fileBytes) {
+                    @Override
+                    public String getFilename() {
+                        return originalName;
+                    }
+                };
+
+        MultiValueMap<String, Object> body =
+                new LinkedMultiValueMap<>();
+        body.add("file", fileResource);
+
+        HttpEntity<MultiValueMap<String, Object>> request =
+                new HttpEntity<>(body, headers);
+
+        ResponseEntity<byte[]> response =
+                restTemplate.postForEntity(
+                        aiServerUrl + "/protect",
+                        request,
+                        byte[].class
+                );
+
+        if (response.getBody() == null) {
+            throw new RuntimeException("AI 보호 처리 실패");
+        }
+
+        return response.getBody();
+    }
 }
