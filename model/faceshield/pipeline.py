@@ -89,11 +89,11 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # 모델 경로 (환경 변수로 오버라이드 가능)
 MODEL_PATH = os.environ.get("MODEL_PATH", "runwayml/stable-diffusion-v1-5")
-UNET_CONFIG = os.environ.get("UNET_CONFIG", "./configs/unet_config.yaml")
-IP_ADAPTER_PATH = os.environ.get("IP_ADAPTER_PATH", "./models/ip-adapter_sd15.bin")
+UNET_CONFIG = os.environ.get("UNET_CONFIG", "./utils/unet/unet_config15.json")
+IP_ADAPTER_PATH = os.environ.get("IP_ADAPTER_PATH", "./utils/unet/ip_adapter/ip-adapter_sd15.bin")
 IMAGE_ENCODER_PATH = os.environ.get("IMAGE_ENCODER_PATH", "h94/IP-Adapter")
-ARCFACE50_PATH = os.environ.get("ARCFACE50_PATH", "./models/arcface_50.pth")
-ARCFACE100_PATH = os.environ.get("ARCFACE100_PATH", "./models/arcface_100.pth")
+ARCFACE50_PATH = os.environ.get("ARCFACE50_PATH", "./models/arcface50_checkpoint.tar")
+ARCFACE100_PATH = os.environ.get("ARCFACE100_PATH", "./models/arcface100_checkpoint.tar")
 LANDMARK_PATH = os.environ.get(
     "LANDMARK_PATH", "./shape_predictor_68_face_landmarks.dat"
 )
@@ -225,10 +225,10 @@ def _load_cnn():
     if _cnn_predictor is not None:
         return _cnn_predictor
     try:
-        from fs_predictor import FSPredictor
-        _cnn_predictor = FSPredictor()
+        from fs_predictor import FSReferencePredictor
+        _cnn_predictor = FSReferencePredictor()
         _cnn_predictor.load_state_dict(
-            torch.load(CNN_PREDICTOR_PATH, map_location=device, weights_only=True)
+            torch.load(CNN_PREDICTOR_PATH, map_location=device, weights_only=True)["model_state_dict"]
         )
         _cnn_predictor.eval().to(device)
         _cnn_predictor.requires_grad_(False)
@@ -304,7 +304,7 @@ def _predict_target(gt_face):
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
     ])
-    input_tensor = tf(img_pil).unsqueeze(0).to(device)
+    input_tensor = tf(img_pil).unsqueeze(0).to(device).float()
     with torch.no_grad():
         pred = cnn(input_tensor).cpu().numpy()[0]
     return {

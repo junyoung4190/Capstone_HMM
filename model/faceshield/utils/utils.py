@@ -572,8 +572,15 @@ def compute_contrast_weight(image, window=5, w_min=0.3, w_max=1.0, threshold=0.0
     weight = (local_std / threshold).clamp(min=w_min, max=w_max)
     return weight
 
-def generate_face_mask(face_image_tensor, landmark_path, dilation=15, blur_kernel=15):
-    """얼굴 영역 마스크 생성 (Multi-branch용)"""
+def generate_face_mask(face_image_tensor, landmark_path, dilation=15, blur_kernel=15,
+                      inner_dilation=8, inner_blur_kernel=3):
+    """
+    얼굴 영역 마스크 + 눈코입 마스크 생성
+    
+    Returns:
+        face_mask: (1, 1, H, W) - 얼굴 전체
+        inner_mask: (1, 1, H, W) - 눈코입만
+    """
     import dlib
     import numpy as np
     import cv2
@@ -591,25 +598,63 @@ def generate_face_mask(face_image_tensor, landmark_path, dilation=15, blur_kerne
     
     faces = detector(img_gray, 1)
     if len(faces) == 0:
-        return torch.ones(1, 1, H, W, device=face_image_tensor.device)
+        ones = torch.ones(1, 1, H, W, device=face_image_tensor.device)
+        return ones, ones * 0
     
     landmarks = predictor(img_gray, faces[0])
     landmarks_np = face_utils.shape_to_np(landmarks)
     
+    # === 얼굴 전체 마스크 ===
     hull = ConvexHull(landmarks_np)
     hull_points = landmarks_np[hull.vertices].astype(np.int32)
     
-    mask = np.zeros((H, W), dtype=np.uint8)
-    cv2.fillPoly(mask, [hull_points], 255)
+    face_mask_np = np.zeros((H, W), dtype=np.uint8)
+    cv2.fillPoly(face_mask_np, [hull_points], 255)
     
     if dilation > 0:
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilation*2+1, dilation*2+1))
-        mask = cv2.dilate(mask, kernel)
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (dilation*2+1, dilation*2+1)
+        )
+        face_mask_np = cv2.dilate(face_mask_np, kernel)
     
     if blur_kernel > 0:
-        mask = cv2.GaussianBlur(mask, (blur_kernel*2+1, blur_kernel*2+1), 0)
+        face_mask_np = cv2.GaussianBlur(
+            face_mask_np, (blur_kernel*2+1, blur_kernel*2+1), 0
+        )
     
-    mask = mask.astype(np.float32) / 255.0
-    mask_tensor = torch.from_numpy(mask).unsqueeze(0).unsqueeze(0).to(face_image_tensor.device)
+    face_mask_np = face_mask_np.astype(np.float32) / 255.0
+    face_mask_tensor = torch.from_numpy(face_mask_np).unsqueeze(0).unsqueeze(0).to(face_image_tensor.device)
     
-    return mask_tensor
+    # === 눈코입 마스크 ===
+    inner_mask_np = np.zeros((H, W), dtype=np.uint8)
+    
+    feature_groups = [
+        landmarks_np[36:42],
+        landmarks_np[42:48],
+        landmarks_np[27:36],
+        landmarks_np[48:68],
+    ]
+    
+    for points in feature_groups:
+        try:
+            feat_hull = ConvexHull(points)
+            feat_pts = points[feat_hull.vertices].astype(np.int32)
+            cv2.fillPoly(inner_mask_np, [feat_pts], 255)
+        except Exception:
+            pass
+    
+    if inner_dilation > 0:
+        inner_kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (inner_dilation*2+1, inner_dilation*2+1)
+        )
+        inner_mask_np = cv2.dilate(inner_mask_np, inner_kernel)
+    
+    if inner_blur_kernel > 0:
+        inner_mask_np = cv2.GaussianBlur(
+            inner_mask_np, (inner_blur_kernel*2+1, inner_blur_kernel*2+1), 0
+        )
+    
+    inner_mask_np = inner_mask_np.astype(np.float32) / 255.0
+    inner_mask_tensor = torch.from_numpy(inner_mask_np).unsqueeze(0).unsqueeze(0).to(face_image_tensor.device)
+    
+    return face_mask_tensor, inner_mask_tensor
