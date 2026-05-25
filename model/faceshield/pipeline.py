@@ -1,35 +1,41 @@
 """
-FaceShield 보호 처리 통합 진입점
+FaceShield+ 보호 처리 통합 진입점 (eps14_inner3 최종본)
 백엔드에서 이거 하나만 import해서 쓰면 됨.
 
 사용 예:
-    from pipeline import protect_image
+    from pipeline import protect_image, predict_risk
 
-    # 1. 파일 경로
+    # 1. 위험도 분석
+    risk = predict_risk("/path/to/image.jpg")
+    # → {'overall_risk': 65, 'risk_label': '높음', 'lpips_risk': ...}
+
+    # 2. 보호 처리 (다양한 입력 형식 지원)
     result = protect_image("/path/to/image.jpg")
-
-    # 2. 이미지 bytes (백엔드 업로드 처리)
-    result = protect_image(image_bytes)
-
-    # 3. numpy 배열 (RGB)
-    result = protect_image(numpy_array)
-
-    # 4. PIL 이미지
-    result = protect_image(pil_image)
-
+    # 또는 bytes / numpy array / PIL Image
     print(result)
     # {
     #   "success": True,
-    #   "protected_bytes": b"...",   # 보호된 이미지 PNG bytes
+    #   "protected_bytes": b"...",
     #   "metrics": {"px_diff": 2.5, ...},
     #   "error": None
     # }
+
+핵심 기능:
+- CNN 기반 image-specific target 예측 (ResNet18)
+- Adaptive Lagrangian PGD with primal-dual λ update
+- Multi-branch region weighting (inner/face/bg)
+- LPIPS perceptual quality loss
+- SAFETY + ONE_SIDED robustness mechanism
+- Contrast-aware per-pixel noise clamp
+- DCT low-pass filter, Gaussian smoothing
 """
 
 import os
 import io
+import json
 import datetime
 import torch
+import torch.nn.functional as F
 import numpy as np
 from PIL import Image
 from omegaconf import OmegaConf
@@ -72,9 +78,12 @@ from utils.landmark.arcface_attack import AttackArcFace
 # DCT tools
 from utils.dct import dct_pass_filter, make_dct_basis, blockfy, encode, decode, deblockfy
 
+# LPIPS (perceptual loss)
+import lpips
+
 
 # ============================================================
-# 1. 설정 (환경 변수로 외부에서 변경 가능)
+# 1. 설정 (eps14_inner3 최종본)
 # ============================================================
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -88,67 +97,79 @@ ARCFACE100_PATH = os.environ.get("ARCFACE100_PATH", "./models/arcface_100.pth")
 LANDMARK_PATH = os.environ.get(
     "LANDMARK_PATH", "./shape_predictor_68_face_landmarks.dat"
 )
+CNN_PREDICTOR_PATH = os.environ.get("CNN_PREDICTOR_PATH", "./fs_predictor_model.pth")
 
-# PGD 하이퍼파라미터
+# PGD 하이퍼파라미터 (eps14_inner3 최종 세팅)
 PGD_CONFIG = {
-    "total_iter": 30,
-    "noise_clamp": 12,
+    "total_iter": int(os.environ.get("TOTAL_ITER", 30)),
+    "noise_clamp": float(os.environ.get("NOISE_CLAMP", 14)),  # ★ ε=14
     "step_size": 1.0,
     "resize_shape": 512,
     "attn_threshold": 0.2,
     "proj_func": "l1",
     "attn_func": "l2",
-    "mtcnn_func": False,  # 원본 default
+    "mtcnn_func": False,
     "arc_func": "cosine",
-    "lambda_face": 1.5,  # v4 multibranch
-    "lambda_bg": 1.0,
+    # Multi-branch region weights (★ eps14_inner3)
+    "lambda_inner": 3.0,   # 눈코입 (가장 강함)
+    "lambda_face":  1.5,   # 얼굴 피부
+    "lambda_bg":    1.0,   # 배경
     "dilation": 15,
-    "blur_kernel": 15,
+    "blur_kernel": 5,
+    "inner_dilation": 8,
+    "inner_blur_kernel": 3,
+    # Fixed α (보호 손실 비중)
+    "alpha_mtcnn": float(os.environ.get("ALPHA_MTCNN", 9)),
+    # Adaptive Lagrangian 설정 (★ 본 contribution)
+    "adaptive": os.environ.get("ADAPTIVE", "true").lower() == "true",
+    "safety_margin": float(os.environ.get("SAFETY_MARGIN", 0.85)),
+    "one_sided": os.environ.get("ONE_SIDED", "true").lower() == "true",
+    "eta_adaptive": float(os.environ.get("ETA_ADAPTIVE", 0.5)),
+    "lambda_min": float(os.environ.get("LAMBDA_MIN", 0.1)),
+    "lambda_init": float(os.environ.get("LAMBDA_INIT", 1.0)),
+    "use_contrast": os.environ.get("USE_CONTRAST", "true").lower() == "true",
 }
 
 
 # ============================================================
 # 2. 모델 로딩 (모듈 import 시 1번만)
 # ============================================================
-print("[FaceShield] Loading models...")
+print("[FaceShield+] Loading models (eps14_inner3)...")
 
-# 2-1. Config
 _config = OmegaConf.load(UNET_CONFIG)
-
-# 2-2. Stable Diffusion 관련
 _tokenizer = CLIPTokenizer.from_pretrained(MODEL_PATH, subfolder="tokenizer")
 _text_encoder = CLIPTextModel.from_pretrained(MODEL_PATH, subfolder="text_encoder")
 _vae = AutoencoderKL.from_pretrained(MODEL_PATH, subfolder="vae")
 _unet = AttackUnet_IP_all.from_pretrained(
     MODEL_PATH, subfolder="unet", config_file=_config, strict=False
 )
-
-# 2-3. CLIP Image Encoder
 _image_preprocess = AttackCLIP()
 _image_encoder = CLIPVisionModelWithProjection.from_pretrained(
     IMAGE_ENCODER_PATH, subfolder="models/image_encoder"
 )
-
-# 2-4. ArcFace (얼굴 인식)
 _face_embedder50 = torch.load(ARCFACE50_PATH, weights_only=False)
 _face_embedder100 = torch.load(ARCFACE100_PATH, weights_only=False)
 _id_preprocess = AttackArcFace()
 
-# 2-5. requires_grad False + GPU 이동
 _vae.requires_grad_(False).to(device)
 _text_encoder.requires_grad_(False).to(device)
 _image_encoder.requires_grad_(False).to(device)
 _face_embedder50.requires_grad_(False).to(device)
 _face_embedder100.requires_grad_(False).to(device)
 
-# 2-6. IP-Adapter Image Projection Model
+# LPIPS (★ 화질 perceptual loss)
+_lpips_fn = lpips.LPIPS(net='alex').to(device)
+_lpips_fn.requires_grad_(False)
+print("[FaceShield+] LPIPS loaded (net=alex)")
+
+# IP-Adapter Image Projection Model
 _image_proj_model = ImageProjModel(
     cross_attention_dim=_unet.config.cross_attention_dim,
     clip_embeddings_dim=_image_encoder.config.projection_dim,
     clip_extra_context_tokens=4,
 ).to(device)
 
-# 2-7. UNet Attention Processors
+# UNet Attention Processors
 _attn_procs = {}
 _unet_sd = _unet.state_dict()
 for name in _unet.attn_processors.keys():
@@ -163,7 +184,6 @@ for name in _unet.attn_processors.keys():
     elif name.startswith("up_blocks"):
         block_id = int(name[len("up_blocks.")])
         hidden_size = list(reversed(_unet.config.block_out_channels))[block_id]
-
     if cross_attention_dim is None:
         _attn_procs[name] = AttnProcessor()
     else:
@@ -176,18 +196,15 @@ for name in _unet.attn_processors.keys():
             hidden_size=hidden_size, cross_attention_dim=cross_attention_dim
         )
         _attn_procs[name].load_state_dict(weights)
-
 _unet.set_attn_processor(_attn_procs)
 _adapter_modules = torch.nn.ModuleList(_unet.attn_processors.values())
 
-# 2-8. IP-Adapter 가중치 로드
 _state_dict = torch.load(IP_ADAPTER_PATH, map_location=device, weights_only=True)
 _image_proj_model.load_state_dict(_state_dict["image_proj"], strict=True)
 _adapter_modules.load_state_dict(_state_dict["ip_adapter"], strict=True)
-
 _unet.requires_grad_(False).to(device)
 
-# 2-9. Text Encoder Hidden States (empty prompt)
+# Text Encoder (empty prompt)
 _inputs = _tokenizer(
     [""],
     max_length=_tokenizer.model_max_length,
@@ -197,7 +214,31 @@ _inputs = _tokenizer(
 )
 _encoder_hidden_states = _text_encoder(_inputs.input_ids.to(device))[0]
 
-print("[FaceShield] Models loaded successfully.")
+# ============================================================
+# 2-9. CNN Predictor (★ image-specific target 예측)
+# ============================================================
+_cnn_predictor = None
+
+def _load_cnn():
+    """CNN을 처음 호출 시 한 번 lazy load."""
+    global _cnn_predictor
+    if _cnn_predictor is not None:
+        return _cnn_predictor
+    try:
+        from fs_predictor import FSPredictor
+        _cnn_predictor = FSPredictor()
+        _cnn_predictor.load_state_dict(
+            torch.load(CNN_PREDICTOR_PATH, map_location=device, weights_only=True)
+        )
+        _cnn_predictor.eval().to(device)
+        _cnn_predictor.requires_grad_(False)
+        print(f"[FaceShield+] CNN predictor loaded from {CNN_PREDICTOR_PATH}")
+        return _cnn_predictor
+    except Exception as e:
+        print(f"[FaceShield+] WARN: CNN predictor 로드 실패 ({e}). Adaptive 모드 비활성화.")
+        return None
+
+print("[FaceShield+] Models loaded successfully.")
 
 
 # ============================================================
@@ -213,18 +254,16 @@ def _to_pil(image_input):
         return Image.fromarray(image_input).convert("RGB")
     if isinstance(image_input, Image.Image):
         return image_input.convert("RGB")
-    if hasattr(image_input, "read"):  # file-like
+    if hasattr(image_input, "read"):
         return Image.open(image_input).convert("RGB")
     raise ValueError(f"Unsupported input type: {type(image_input)}")
-
 
 def _pil_to_tensor(pil_img, size=512):
     """PIL → (1, 3, H, W) tensor [0, 1] range"""
     pil_img = pil_img.resize((size, size), Image.LANCZOS)
-    arr = np.array(pil_img).astype(np.float32) / 255.0  # (H, W, 3)
-    tensor = torch.from_numpy(arr).permute(2, 0, 1).contiguous().unsqueeze(0)  # (1, 3, H, W)
+    arr = np.array(pil_img).astype(np.float32) / 255.0
+    tensor = torch.from_numpy(arr).permute(2, 0, 1).contiguous().unsqueeze(0)
     return tensor.to(device)
-
 
 def _tensor_to_bytes(tensor, format="PNG"):
     """(1, 3, H, W) tensor [0, 1] → PNG bytes"""
@@ -235,54 +274,87 @@ def _tensor_to_bytes(tensor, format="PNG"):
     pil_img.save(buf, format=format)
     return buf.getvalue()
 
-
 def _compute_metrics(gt_face, protected):
-    """간단한 메트릭 계산 (pixel_diff)"""
+    """간단한 메트릭 계산"""
     diff = (gt_face - protected).abs() * 255
     return {"px_diff": float(diff.mean().cpu())}
 
 
 # ============================================================
-# 4. PGD 보호 처리 핵심 로직 (attack.py에서 분리)
+# 4. CNN target 예측 (★ Adaptive 모드용)
+# ============================================================
+def _predict_target(gt_face):
+    """
+    CNN으로 이 이미지의 target metric 3개 예측.
+    Args:
+        gt_face: (1, 3, H, W) tensor [0, 1]
+    Returns:
+        dict {'lpips': float, 'clip_sim': float, 'arc_sim': float} 또는 None
+    """
+    cnn = _load_cnn()
+    if cnn is None:
+        return None
+    # CNN 입력 형식 (224×224, normalized)
+    from torchvision import transforms
+    img_pil = Image.fromarray(
+        (gt_face.squeeze(0).permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
+    )
+    tf = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    ])
+    input_tensor = tf(img_pil).unsqueeze(0).to(device)
+    with torch.no_grad():
+        pred = cnn(input_tensor).cpu().numpy()[0]
+    return {
+        'lpips':    float(pred[0]),
+        'clip_sim': float(pred[1]),
+        'arc_sim':  float(pred[2]),
+    }
+
+
+# ============================================================
+# 5. PGD 보호 처리 핵심 로직 (★ eps14_inner3 = Adaptive Lagrangian + 3-branch + LPIPS)
 # ============================================================
 def _run_pgd(gt_face):
     """
-    v4 Multi-branch PGD 보호 처리.
-
+    eps14_inner3 PGD 보호 처리.
     Args:
         gt_face: (1, 3, H, W) tensor, [0, 1] range
-
     Returns:
         protected: (1, 3, H, W) tensor, [0, 1] range
     """
-    # === 얼굴 마스크 생성 (Multi-branch용) ===
-    face_mask = generate_face_mask(
+    # === 얼굴 마스크 + 눈코입 마스크 (★ 3-branch) ===
+    face_mask, inner_mask = generate_face_mask(
         gt_face[0],
         LANDMARK_PATH,
         dilation=PGD_CONFIG["dilation"],
         blur_kernel=PGD_CONFIG["blur_kernel"],
+        inner_dilation=PGD_CONFIG["inner_dilation"],
+        inner_blur_kernel=PGD_CONFIG["inner_blur_kernel"],
     )
-
+    
     # === Loss 함수 ===
     proj_func = get_loss_function(PGD_CONFIG["proj_func"])
     attn_func = get_loss_function(PGD_CONFIG["attn_func"])
     mtcnn_func = get_loss_function(PGD_CONFIG["mtcnn_func"])
     arc_func = get_loss_function(PGD_CONFIG["arc_func"])
-
+    
     # === VAE Encoding ===
     latents_query = compute_vae_encodings(gt_face, _vae, device, gt=True)
-
+    
     # === DCT 준비 ===
     N = 8
     DCT_basis = make_dct_basis(N, device)
     low_pass_filter, _ = dct_pass_filter(device)
     timestep = torch.tensor([0], device=device)
-
+    
     # === ArcFace GT ===
     gt_50, gt_100 = _id_preprocess.preprocess(gt_face)
     gt_id_50 = _face_embedder50(gt_50.to(device))
     gt_id_100 = _face_embedder100(gt_100.to(device))
-
+    
     # === UNet GT ===
     var_controller = AttentionStore()
     gt_preprocessed = _image_preprocess(gt_face)
@@ -290,31 +362,45 @@ def _run_pgd(gt_face):
     gt_proj = _image_proj_model(gt_encoded)
     stacked_encoder_hidden_states = torch.cat([_encoder_hidden_states, gt_proj], dim=1)
     _unet(
-        latents_query,
-        timestep,
-        stacked_encoder_hidden_states,
+        latents_query, timestep, stacked_encoder_hidden_states,
         store_controller=var_controller,
         unet_threshold=PGD_CONFIG["attn_threshold"],
     )
-
+    
+    # === Adaptive λ 초기화 ===
+    lam_lpips = PGD_CONFIG["lambda_init"]
+    lam_clip  = PGD_CONFIG["lambda_init"]
+    lam_arc   = PGD_CONFIG["lambda_init"]
+    adaptive_target = None
+    if PGD_CONFIG["adaptive"]:
+        adaptive_target = _predict_target(gt_face)
+        if adaptive_target is not None:
+            print(f"[Adaptive] CNN target: {adaptive_target}")
+        else:
+            print("[Adaptive] target 예측 실패 → fixed mode")
+    
     # === PGD 30 iter ===
     with torch.enable_grad():
         delta = torch.zeros_like(gt_face, requires_grad=True).to(device)
-
-        # Contrast scaling 활성화
-        with torch.no_grad():
-            contrast_weight = compute_contrast_weight(gt_face)
-
+        
+        # Contrast-aware
+        if PGD_CONFIG["use_contrast"]:
+            with torch.no_grad():
+                contrast_weight = compute_contrast_weight(gt_face)
+        else:
+            contrast_weight = None
+        
         for i in tqdm(range(PGD_CONFIG["total_iter"]), desc="[PGD]"):
             adv_face = (255 * gt_face) + delta
             adv_face = torch.clamp(adv_face, min=0, max=255)
-
+            
             # MTCNN attack
             mtcnn_loss = 0
             mtcnn_loss = mtcnn_attack(
-                2 * (adv_face / 255) - 1, loss_fn=mtcnn_func, loss=mtcnn_loss, device=device
+                2 * (adv_face / 255) - 1, loss_fn=mtcnn_func,
+                loss=mtcnn_loss, device=device
             )
-
+            
             # ArcFace Identity Attack
             adv_50, adv_100 = _id_preprocess.preprocess(adv_face / 255)
             adv_id_50 = _face_embedder50(adv_50)
@@ -322,7 +408,7 @@ def _run_pgd(gt_face):
             id_loss_50 = arc_func(adv_id_50, gt_id_50)
             id_loss_100 = arc_func(adv_id_100, gt_id_100)
             id_loss = (-1) * id_loss_50 + (-1) * id_loss_100
-
+            
             # Diff-Conditioned UNet Attack
             adv_preprocessed = _image_preprocess(adv_face / 255)
             adv_encoded = _image_encoder(adv_preprocessed).image_embeds
@@ -330,46 +416,93 @@ def _run_pgd(gt_face):
             stacked_encoder_hidden_states = torch.cat(
                 [_encoder_hidden_states, adv_proj], dim=1
             )
-
             clip_loss = proj_func(adv_encoded, gt_encoded)
             attn_loss = 0
             attn_loss = _unet(
-                latents_query,
-                timestep,
-                stacked_encoder_hidden_states,
-                loss_fn=attn_func,
-                loss=attn_loss,
+                latents_query, timestep, stacked_encoder_hidden_states,
+                loss_fn=attn_func, loss=attn_loss,
                 gt_attn_map=var_controller.attn_map.copy(),
             )
             unet_loss = (-1) * clip_loss + (+1) * attn_loss
-
-            # PGD Update with Multi-branch region weight
-            total_loss = 9 * mtcnn_loss + 4 * id_loss + 1 * unet_loss
+            
+            # ★ LPIPS (perceptual quality loss)
+            lpips_input_adv = 2 * (adv_face / 255) - 1
+            lpips_input_gt = 2 * gt_face - 1
+            lpips_loss = _lpips_fn(lpips_input_adv, lpips_input_gt).mean()
+            
+            # ★ Adaptive Lagrangian λ 자동 조정 (5 iter마다)
+            if PGD_CONFIG["adaptive"] and adaptive_target is not None and i % 5 == 0:
+                with torch.no_grad():
+                    cur_arc   = F.cosine_similarity(adv_id_100, gt_id_100, dim=-1).mean().item()
+                    cur_clip  = F.cosine_similarity(adv_encoded, gt_encoded, dim=-1).mean().item()
+                    cur_lpips = lpips_loss.item()
+                
+                SAFETY = PGD_CONFIG["safety_margin"]
+                ONE_SIDED = PGD_CONFIG["one_sided"]
+                eta = PGD_CONFIG["eta_adaptive"]
+                lam_min = PGD_CONFIG["lambda_min"]
+                
+                gap_lpips = cur_lpips - adaptive_target['lpips']    * SAFETY
+                gap_clip  = cur_clip  - adaptive_target['clip_sim'] * SAFETY
+                gap_arc   = cur_arc   - adaptive_target['arc_sim']  * SAFETY
+                
+                if ONE_SIDED:
+                    gap_lpips = max(0, gap_lpips)
+                    gap_clip  = max(0, gap_clip)
+                    gap_arc   = max(0, gap_arc)
+                
+                lam_lpips = max(lam_min, lam_lpips + eta * gap_lpips)
+                lam_clip  = max(lam_min, lam_clip  + eta * gap_clip)
+                lam_arc   = max(lam_min, lam_arc   + eta * gap_arc)
+            
+            # Total loss
+            if PGD_CONFIG["adaptive"] and adaptive_target is not None:
+                total_loss = (
+                    PGD_CONFIG["alpha_mtcnn"] * mtcnn_loss
+                    + lam_arc   * id_loss
+                    + lam_clip  * unet_loss
+                    + lam_lpips * lpips_loss
+                )
+            else:
+                # Fallback fixed-α
+                alpha_id = float(os.environ.get("ALPHA_ID", 4))
+                alpha_unet = float(os.environ.get("ALPHA_UNET", 1))
+                alpha_lpips = float(os.environ.get("ALPHA_LPIPS", 0))
+                total_loss = (
+                    PGD_CONFIG["alpha_mtcnn"] * mtcnn_loss
+                    + alpha_id * id_loss
+                    + alpha_unet * unet_loss
+                    + alpha_lpips * lpips_loss
+                )
+            
             total_loss.backward(retain_graph=True)
-
-            # ★ Multi-branch: 영역별 gradient 가중치 ★
+            
+            # ★ Multi-branch 3단계 (눈코입 + 피부 + 배경)
+            inner_area = inner_mask
+            skin_area  = (face_mask - inner_mask).clamp(0, 1)
+            bg_area    = 1 - face_mask
             region_weight = (
-                PGD_CONFIG["lambda_face"] * face_mask
-                + PGD_CONFIG["lambda_bg"] * (1 - face_mask)
+                PGD_CONFIG["lambda_inner"] * inner_area
+                + PGD_CONFIG["lambda_face"]  * skin_area
+                + PGD_CONFIG["lambda_bg"]    * bg_area
             )
-            new_delta = (
-                PGD_CONFIG["step_size"] * torch.sign(delta.grad) * region_weight
-            )
-
-            # Smooth with Gaussian Blur
+            
+            new_delta = PGD_CONFIG["step_size"] * torch.sign(delta.grad) * region_weight
+            
+            # Gaussian smoothing
             d_rgb = scale_tensor(new_delta)
             mask = create_line_mask(None, d_rgb)
             new_delta = apply_gaussian(None, new_delta, mask, 9, 5)
-
-            # Low-Pass Filter in DCT Domain
+            
+            # DCT low-pass
             delta.data -= new_delta
             grad_block, pad_size = blockfy(delta.data, N)
             grad_dct = encode(grad_block, DCT_basis)
             grad_dct_passed = grad_dct * low_pass_filter.expand(grad_dct.shape)
             grad_block_passed = decode(grad_dct_passed, DCT_basis)
             delta.data = deblockfy(grad_block_passed, pad_size)
-
-            # Contrast-aware per-pixel clamp
+            
+            # Contrast-aware clamp
             if contrast_weight is not None:
                 local_max = PGD_CONFIG["noise_clamp"] * contrast_weight
                 delta.data = torch.clamp(delta.data, min=-local_max, max=local_max)
@@ -379,41 +512,107 @@ def _run_pgd(gt_face):
                     min=-PGD_CONFIG["noise_clamp"],
                     max=PGD_CONFIG["noise_clamp"],
                 )
-
-            # Final clamp
+            
+            # Final ε-ball
             delta.data = torch.clamp(
                 delta.data,
                 min=-PGD_CONFIG["noise_clamp"],
                 max=PGD_CONFIG["noise_clamp"],
             )
             delta.grad = None
-
+            
             # 메모리 정리
             del mtcnn_loss, clip_loss, attn_loss, unet_loss, total_loss
-            del id_loss_50, id_loss_100, id_loss
+            del id_loss_50, id_loss_100, id_loss, lpips_loss
             torch.cuda.empty_cache()
-
-    # === 최종 보호 이미지 ===
+    
+    # === 최종 보호 이미지 + 배경 smoothing ===
+    bg_smooth_kernel = _make_gaussian_kernel(
+        kernel_size=5, sigma=1.0, channels=3, device=device
+    )
+    delta_blurred = F.conv2d(
+        delta.data, bg_smooth_kernel, padding=2, groups=3
+    )
+    delta.data = delta.data * face_mask + delta_blurred * (1 - face_mask)
     protected = torch.clamp((gt_face * 255) + delta, 0, 255) / 255
     return protected
 
 
+def _make_gaussian_kernel(kernel_size=5, sigma=1.0, channels=3, device='cuda'):
+    """Background smoothing용 Gaussian kernel"""
+    coords = torch.arange(kernel_size, dtype=torch.float32, device=device)
+    coords -= kernel_size // 2
+    g = torch.exp(-coords**2 / (2 * sigma**2))
+    g = g / g.sum()
+    kernel_2d = g.unsqueeze(0) * g.unsqueeze(1)
+    kernel = kernel_2d.unsqueeze(0).unsqueeze(0)
+    return kernel.expand(channels, 1, kernel_size, kernel_size)
+
+
 # ============================================================
-# 5. 메인 API (백엔드가 호출하는 함수)
+# 6. 메인 API (백엔드용)
 # ============================================================
+def predict_risk(image_input):
+    """
+    이미지의 보호 위험도 분석.
+    Args:
+        image_input: 파일경로(str) / bytes / numpy / PIL / file-like
+    Returns:
+        dict {
+            'overall_risk': int (0~100),
+            'risk_label':   str ('낮음' / '보통' / '높음'),
+            'lpips_risk':   float,
+            'clip_risk':    float,
+            'arc_risk':     float,
+        }
+    """
+    try:
+        pil_img = _to_pil(image_input)
+        gt_face = _pil_to_tensor(pil_img, size=PGD_CONFIG["resize_shape"])
+        target = _predict_target(gt_face)
+        if target is None:
+            return {
+                'overall_risk': 50,
+                'risk_label':   '보통',
+                'lpips_risk':   0.0,
+                'clip_risk':    0.0,
+                'arc_risk':     0.0,
+                'error': 'CNN predictor 사용 불가',
+            }
+        
+        # 종합 위험도 (0~100 정규화)
+        overall = int(min(100, max(0,
+            (abs(target['lpips']) * 100 + target['clip_sim'] * 50 + abs(target['arc_sim']) * 100) / 2
+        )))
+        label = '낮음' if overall < 30 else ('보통' if overall < 60 else '높음')
+        
+        return {
+            'overall_risk': overall,
+            'risk_label':   label,
+            'lpips_risk':   target['lpips'],
+            'clip_risk':    target['clip_sim'],
+            'arc_risk':     target['arc_sim'],
+        }
+    except Exception as e:
+        import traceback
+        return {
+            'overall_risk': 50,
+            'risk_label':   '보통',
+            'error': f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}",
+        }
+
+
 def protect_image(image_input):
     """
     이미지에 적대적 노이즈를 추가하여 deepfake 보호 처리.
-
     Args:
-        image_input: 파일경로(str) / bytes / numpy.ndarray / PIL.Image / file-like
-
+        image_input: 파일경로(str) / bytes / numpy / PIL / file-like
     Returns:
-        dict: {
+        dict {
             "success" (bool),
-            "protected_bytes" (bytes or None): PNG 포맷 보호된 이미지
-            "metrics" (dict): {"px_diff": float}
-            "error" (str or None)
+            "protected_bytes" (bytes or None): PNG 보호 이미지,
+            "metrics" (dict): {"px_diff": float},
+            "error" (str or None),
         }
     """
     result = {
@@ -422,48 +621,47 @@ def protect_image(image_input):
         "metrics": None,
         "error": None,
     }
-
     try:
-        # 1. 입력 → PIL → tensor
         pil_img = _to_pil(image_input)
         gt_face = _pil_to_tensor(pil_img, size=PGD_CONFIG["resize_shape"])
-
-        # 2. PGD 보호 처리
+        
         with torch.amp.autocast("cuda" if torch.cuda.is_available() else "cpu"):
             protected = _run_pgd(gt_face)
-
-        # 3. 결과 metric 계산
+        
         metrics = _compute_metrics(gt_face, protected)
-
-        # 4. tensor → PNG bytes
         protected_bytes = _tensor_to_bytes(protected, format="PNG")
-
-        result.update(
-            {
-                "success": True,
-                "protected_bytes": protected_bytes,
-                "metrics": metrics,
-            }
-        )
-
+        
+        result.update({
+            "success": True,
+            "protected_bytes": protected_bytes,
+            "metrics": metrics,
+        })
     except Exception as e:
         import traceback
         result["error"] = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
-
+    
     return result
 
 
 # ============================================================
-# 6. 테스트 (모듈 직접 실행 시)
+# 7. 테스트 (모듈 직접 실행 시)
 # ============================================================
 if __name__ == "__main__":
     test_path = os.environ.get("TEST_IMAGE", "./data/test/Tom_ori.jpg")
     print(f"[테스트 입력] {test_path}\n")
-
+    
+    # 1. 위험도 분석
+    print("=== Step 1: 위험도 분석 ===")
+    risk = predict_risk(test_path)
+    print(f"종합 위험도: {risk.get('overall_risk', '?')}/100 ({risk.get('risk_label', '?')})")
+    if 'lpips_risk' in risk:
+        print(f"세부: LPIPS={risk['lpips_risk']:.4f}, "
+              f"CLIP={risk['clip_risk']:.4f}, Arc={risk['arc_risk']:.4f}")
+    
+    # 2. 보호 처리
+    print("\n=== Step 2: 보호 처리 ===")
     result = protect_image(test_path)
-
     if result["success"]:
-        # 결과 이미지 저장
         out_path = "./pipeline_test_output.png"
         with open(out_path, "wb") as f:
             f.write(result["protected_bytes"])
