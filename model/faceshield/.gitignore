@@ -20,3 +20,7 @@ pipeline_test_output.png
 # Local
 .DS_Store
 *.log
+
+# === FaceShield+ critical weight (force include) ===
+
+!fs_predictor_model.pth
