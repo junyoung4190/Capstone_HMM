@@ -12,6 +12,8 @@ public class ImageResponse {
 
     private Double riskScore;
 
+    private String riskDescription; // ✅ 추가
+
     private String resultPath;
 
     private String errorMessage;
@@ -22,6 +24,7 @@ public class ImageResponse {
             String url,
             String status,
             Double riskScore,
+            String riskDescription, // ✅ 추가
             String resultPath,
             String errorMessage
     ) {
@@ -30,6 +33,7 @@ public class ImageResponse {
         this.url = url;
         this.status = status;
         this.riskScore = riskScore;
+        this.riskDescription = riskDescription; // ✅ 추가
         this.resultPath = resultPath;
         this.errorMessage = errorMessage;
     }
@@ -53,6 +57,8 @@ public class ImageResponse {
     public Double getRiskScore() {
         return riskScore;
     }
+
+    public String getRiskDescription() { return riskDescription; } // ✅ 추가
 
     public String getResultPath() {
         return resultPath;

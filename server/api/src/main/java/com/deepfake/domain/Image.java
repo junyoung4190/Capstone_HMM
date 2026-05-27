@@ -19,6 +19,9 @@ public class Image {
 
     private Double riskScore;
 
+    @Column(length = 500)
+    private String riskDescription; // ✅ 추가
+
     @Enumerated(EnumType.STRING)
     private ImageStatus status;
 
@@ -71,6 +74,10 @@ public class Image {
     public void setRiskScore(Double riskScore) {
         this.riskScore = riskScore;
     }
+
+    public String getRiskDescription() { return riskDescription; } // ✅ 추가
+
+    public void setRiskDescription(String riskDescription) { this.riskDescription = riskDescription; } // ✅ 추가
 
     public ImageStatus getStatus() {
         return status;
