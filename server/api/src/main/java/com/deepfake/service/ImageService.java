@@ -113,6 +113,8 @@ public class ImageService {
 
             if (result.getRisk() != null) {
                 image.setRiskScore(result.getRisk().getScore());
+                // ✅ 위험도 설명 세팅
+                image.setRiskDescription(getRiskDescription(result.getRisk().getScore()));
             }
 
             image.setStatus(ImageStatus.COMPLETED);
@@ -125,6 +127,23 @@ public class ImageService {
             imageRepository.save(image);
 
             e.printStackTrace();
+        }
+    }
+
+    // ✅ 위험도 점수에 따른 설명 반환 메서드
+    private String getRiskDescription(double score) {
+        if (score < 0.4) {
+            return "얼굴 영역이 이미지에서 차지하는 비율이 낮거나, 얼굴이 측면을 향하고 있습니다. " +
+                    "이 경우 얼굴 인식 모델이 특징점을 충분히 추출하기 어려워, " +
+                    "딥페이크 생성에 필요한 조건을 갖추지 못한 상태입니다.";
+        } else if (score < 0.7) {
+            return "얼굴 크기 또는 정면 각도 중 한 가지 조건이 완전히 충족되지 않은 상태입니다. " +
+                    "조건이 개선된 다른 사진과 함께 사용될 경우 위험도가 높아질 수 있으므로, " +
+                    "보호 적용을 고려해 보세요.";
+        } else {
+            return "얼굴이 이미지에서 충분한 크기로 촬영되었고 정면을 향하고 있습니다. " +
+                    "이는 얼굴 인식 모델이 특징점을 정밀하게 추출할 수 있는 조건으로, " +
+                    "딥페이크 생성에 직접 활용될 수 있습니다. FaceShield 보호 적용을 권장합니다.";
         }
     }
 
@@ -142,6 +161,7 @@ public class ImageService {
                         "http://localhost:8080/view/" + img.getFilePath(),
                         img.getStatus().name(),
                         img.getRiskScore(),
+                        img.getRiskDescription(), // ✅ 추가
                         img.getResultPath(),
                         img.getErrorMessage()
                 ))
@@ -172,6 +192,7 @@ public class ImageService {
                     "http://localhost:8080/view/" + image.getFilePath(),
                     image.getStatus().name(),
                     image.getRiskScore(),
+                    image.getRiskDescription(), // ✅ 추가
                     "http://localhost:8080/view/" + savedName,
                     null
             );
@@ -196,6 +217,7 @@ public class ImageService {
                 "http://localhost:8080/view/" + img.getFilePath(),
                 img.getStatus().name(),
                 img.getRiskScore(),
+                img.getRiskDescription(), // ✅ 추가
                 img.getResultPath(),
                 img.getErrorMessage()
         );

@@ -37,8 +37,11 @@ public class AnalyzeResult {
     public static class Risk {
         private double score;
         private String level;
+        private String description; // ✅ 추가
 
         public double getScore() { return score; }
         public String getLevel() { return level; }
+        public String getDescription() { return description; } // ✅ 추가
+        public void setDescription(String description) { this.description = description; } // ✅ 추가
     }
 }
