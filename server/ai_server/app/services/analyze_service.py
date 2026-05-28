@@ -2,7 +2,10 @@ import os
 import sys
 import tempfile
 
-_BASE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+_BASE = os.environ.get(
+    "PROJECT_ROOT",
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+)
 
 # regressor.py 내부의 `from model import SixDRepNet` 와 `import utils` 가
 # sixdrepnet/model.py, sixdrepnet/utils.py 를 찾도록 sixdrepnet/ 을 추가
