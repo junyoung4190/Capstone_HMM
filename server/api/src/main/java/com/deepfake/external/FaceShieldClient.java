@@ -21,34 +21,12 @@ public class FaceShieldClient {
         this.restTemplate = restTemplate;
     }
 
-    // MultipartFile 대신 byte[] + filename을 받도록 변경
-    // → @Async 컨텍스트에서도 안전하게 호출 가능
     public AnalyzeResult analyze(byte[] fileBytes, String originalName) {
-
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
-
-        ByteArrayResource fileResource =
-                new ByteArrayResource(fileBytes) {
-                    @Override
-                    public String getFilename() {
-                        return originalName;
-                    }
-                };
-
-        MultiValueMap<String, Object> body =
-                new LinkedMultiValueMap<>();
-        body.add("file", fileResource);
-
-        HttpEntity<MultiValueMap<String, Object>> request =
-                new HttpEntity<>(body, headers);
-
-        ResponseEntity<AnalyzeResult> response =
-                restTemplate.postForEntity(
-                        aiServerUrl + "/analyze",
-                        request,
-                        AnalyzeResult.class
-                );
+        ResponseEntity<AnalyzeResult> response = restTemplate.postForEntity(
+                aiServerUrl + "/analyze",
+                buildMultipartRequest(fileBytes, originalName),
+                AnalyzeResult.class
+        );
 
         if (response.getBody() == null) {
             throw new RuntimeException("AI 분석 실패");
@@ -58,36 +36,46 @@ public class FaceShieldClient {
     }
 
     public byte[] protect(byte[] fileBytes, String originalName) {
-
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
-
-        ByteArrayResource fileResource =
-                new ByteArrayResource(fileBytes) {
-                    @Override
-                    public String getFilename() {
-                        return originalName;
-                    }
-                };
-
-        MultiValueMap<String, Object> body =
-                new LinkedMultiValueMap<>();
-        body.add("file", fileResource);
-
-        HttpEntity<MultiValueMap<String, Object>> request =
-                new HttpEntity<>(body, headers);
-
-        ResponseEntity<byte[]> response =
-                restTemplate.postForEntity(
-                        aiServerUrl + "/protect",
-                        request,
-                        byte[].class
-                );
+        ResponseEntity<byte[]> response = restTemplate.postForEntity(
+                aiServerUrl + "/protect",
+                buildMultipartRequest(fileBytes, originalName),
+                byte[].class
+        );
 
         if (response.getBody() == null) {
             throw new RuntimeException("AI 보호 처리 실패");
         }
 
         return response.getBody();
+    }
+
+    private HttpEntity<MultiValueMap<String, Object>> buildMultipartRequest(byte[] fileBytes, String fileName) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+
+        ByteArrayResource fileResource = new ByteArrayResource(fileBytes) {
+            @Override
+            public String getFilename() {
+                return toSafeFileName(fileName);
+            }
+        };
+
+        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+        body.add("file", fileResource);
+
+        return new HttpEntity<>(body, headers);
+    }
+
+    private String toSafeFileName(String fileName) {
+        if (fileName == null || fileName.isBlank()) {
+            return "image.jpg";
+        }
+
+        String safeName = fileName.replaceAll("[^A-Za-z0-9._-]", "_");
+        if (safeName.isBlank() || safeName.replace("_", "").isBlank()) {
+            return "image.jpg";
+        }
+
+        return safeName;
     }
 }

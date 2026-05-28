@@ -9,8 +9,8 @@ import com.deepfake.entity.ImageStatus;
 import com.deepfake.external.FaceShieldClient;
 import com.deepfake.repository.ImageRepository;
 import com.deepfake.repository.UserRepository;
-
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -28,16 +28,19 @@ public class ImageService {
     private final ImageRepository imageRepository;
     private final UserRepository userRepository;
     private final FaceShieldClient faceShieldClient;
+    private final String appBaseUrl;
 
     @Autowired
     public ImageService(
             ImageRepository imageRepository,
             UserRepository userRepository,
-            FaceShieldClient faceShieldClient
+            FaceShieldClient faceShieldClient,
+            @Value("${app.base-url}") String appBaseUrl
     ) {
         this.imageRepository = imageRepository;
         this.userRepository = userRepository;
         this.faceShieldClient = faceShieldClient;
+        this.appBaseUrl = trimTrailingSlash(appBaseUrl);
     }
 
     public ImageUploadResponse uploadImage(
@@ -55,8 +58,6 @@ public class ImageService {
                                 new RuntimeException("유저 없음"));
             }
 
-            // 파일 바이트를 요청 컨텍스트 안에서 미리 추출
-            // (MultipartFile은 @Async 컨텍스트에서 재사용 불가)
             byte[] fileBytes = file.getBytes();
             String originalName = file.getOriginalFilename();
 
@@ -64,7 +65,6 @@ public class ImageService {
                 throw new RuntimeException("파일 이름 없음");
             }
 
-            // 파일 저장
             String savedName = saveFile(fileBytes, originalName);
 
             Image image = new Image(
@@ -76,14 +76,11 @@ public class ImageService {
             image.setStatus(ImageStatus.PENDING);
             imageRepository.save(image);
 
-            // AI 분석 — byte[]로 전달하여 비동기 컨텍스트에서도 안전하게 사용
             analyzeAsync(image.getId(), fileBytes, originalName);
-
-            String url = "http://localhost:8080/view/" + savedName;
 
             return new ImageUploadResponse(
                     image.getId(),
-                    url,
+                    buildViewUrl(savedName),
                     null
             );
 
@@ -113,7 +110,6 @@ public class ImageService {
 
             if (result.getRisk() != null) {
                 image.setRiskScore(result.getRisk().getScore());
-                // ✅ 위험도 설명 세팅
                 image.setRiskDescription(getRiskDescription(result.getRisk().getScore()));
             }
 
@@ -130,7 +126,6 @@ public class ImageService {
         }
     }
 
-    // ✅ 위험도 점수에 따른 설명 반환 메서드
     private String getRiskDescription(double score) {
         if (score < 0.4) {
             return "얼굴 영역이 이미지에서 차지하는 비율이 낮거나, 얼굴이 측면을 향하고 있습니다. " +
@@ -149,6 +144,10 @@ public class ImageService {
 
     public List<ImageResponse> getMyImages(Long userId) {
 
+        if (userId == null) {
+            throw new RuntimeException("로그인이 필요합니다.");
+        }
+
         User user = userRepository.findById(userId)
                 .orElseThrow(() ->
                         new RuntimeException("유저 없음"));
@@ -158,11 +157,11 @@ public class ImageService {
                 .map(img -> new ImageResponse(
                         img.getId(),
                         img.getFileName(),
-                        "http://localhost:8080/view/" + img.getFilePath(),
+                        buildViewUrl(img.getFilePath()),
                         img.getStatus().name(),
                         img.getRiskScore(),
-                        img.getRiskDescription(), // ✅ 추가
-                        img.getResultPath(),
+                        img.getRiskDescription(),
+                        buildNullableViewUrl(img.getResultPath()),
                         img.getErrorMessage()
                 ))
                 .collect(Collectors.toList());
@@ -189,11 +188,11 @@ public class ImageService {
             return new ImageResponse(
                     image.getId(),
                     image.getFileName(),
-                    "http://localhost:8080/view/" + image.getFilePath(),
+                    buildViewUrl(image.getFilePath()),
                     image.getStatus().name(),
                     image.getRiskScore(),
-                    image.getRiskDescription(), // ✅ 추가
-                    "http://localhost:8080/view/" + savedName,
+                    image.getRiskDescription(),
+                    buildViewUrl(savedName),
                     null
             );
 
@@ -214,11 +213,11 @@ public class ImageService {
         return new ImageResponse(
                 img.getId(),
                 img.getFileName(),
-                "http://localhost:8080/view/" + img.getFilePath(),
+                buildViewUrl(img.getFilePath()),
                 img.getStatus().name(),
                 img.getRiskScore(),
-                img.getRiskDescription(), // ✅ 추가
-                img.getResultPath(),
+                img.getRiskDescription(),
+                buildNullableViewUrl(img.getResultPath()),
                 img.getErrorMessage()
         );
     }
@@ -234,10 +233,10 @@ public class ImageService {
             dir.mkdirs();
         }
 
-        // 확장자 없는 파일명 방어 처리
-        int dotIndex = originalName.lastIndexOf(".");
+        String safeOriginalName = toSafeFileName(originalName);
+        int dotIndex = safeOriginalName.lastIndexOf(".");
         String extension = (dotIndex >= 0)
-                ? originalName.substring(dotIndex)
+                ? safeOriginalName.substring(dotIndex)
                 : "";
 
         String savedName = UUID.randomUUID() + extension;
@@ -249,5 +248,34 @@ public class ImageService {
         System.out.println("저장 파일 크기: " + saveFile.length());
 
         return saveFile.getName();
+    }
+
+    private String buildViewUrl(String fileName) {
+        return appBaseUrl + "/view/" + fileName;
+    }
+
+    private String buildNullableViewUrl(String fileName) {
+        return fileName == null || fileName.isBlank() ? null : buildViewUrl(fileName);
+    }
+
+    private String trimTrailingSlash(String value) {
+        if (value == null || value.isBlank()) {
+            return "http://localhost:8080";
+        }
+
+        return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
+    }
+
+    private String toSafeFileName(String fileName) {
+        if (fileName == null || fileName.isBlank()) {
+            return "image.jpg";
+        }
+
+        String safeName = fileName.replaceAll("[^A-Za-z0-9._-]", "_");
+        if (safeName.isBlank() || safeName.replace("_", "").isBlank()) {
+            return "image.jpg";
+        }
+
+        return safeName;
     }
 }
