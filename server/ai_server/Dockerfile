@@ -39,6 +39,7 @@ RUN mkdir -p uploads protected model/faceshield/models
 
 # Risk Analyzer
 ENV YOLO_WEIGHTS_PATH=/app/model/weights/yolov8n-face.pt
+ENV PROJECT_ROOT=/app
 
 # FaceShield 모델 경로
 ENV FACESHIELD_DIR=/app/model/faceshield
