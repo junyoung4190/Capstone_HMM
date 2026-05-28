@@ -9,6 +9,8 @@ struct MainView: View {
     @State private var goLoading = false
     @State private var isLoggedIn = false
     @State private var showHistory = false
+    @State private var showNotice = false
+    @State private var dontShowAgain = false
 
     var body: some View {
         NavigationStack {
@@ -119,8 +121,63 @@ struct MainView: View {
                     SignupView(showSignup: $showSignup, showLogin: $showLogin)
                         .transition(.move(edge: .bottom))
                 }
+                
+                if showNotice {
+                    Color.black.opacity(0.4)
+                        .ignoresSafeArea()
+                    
+                    VStack(spacing: 20) {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 16) {
+                                Group {
+                                    Text("사진 공유 주의사항").bold()
+                                    Text("• 정면 고화질 사진은 SNS 공개 범위를 설정해 주세요\n• 얼굴이 잘 보이는 사진은 불특정 다수에게 전송하지 않는 것이 좋아요\n• 이미 유포된 사진은 FaceShield로 소급 보호가 어렵습니다")
+                                }
+                                Group {
+                                    Text("딥페이크 피해 유형").bold()
+                                    Text("• 얼굴 합성을 이용한 불법 영상물 제작\n• 지인을 사칭한 보이스피싱 및 금융 사기\n• 허위 영상을 통한 명예 침해")
+                                }
+                                Group {
+                                    Text("피해 발생 시 대처 방법").bold()
+                                    Text("• 피해 영상 또는 이미지를 캡처해 증거로 보관하세요\n• 방송통신심의위원회에 불법정보를 신고할 수 있어요\n• 경찰청 사이버범죄 신고센터를 통해 도움받으실 수 있어요")
+                                }
+                                Group {
+                                    Text("앱 사용 전 안내").bold()
+                                    Text("• 보호 처리 전 원본 사진을 미리 백업해 두세요\n• 보호 처리를 해도 모든 상황에서 완전히 안전하다고 보장하기는 어려워요\n• 위험도가 낮더라도 다른 방식의 딥페이크에는 취약할 수 있어요")
+                                }
+                            }
+                            .padding()
+                        }
+                        .frame(maxHeight: 350)
+                        
+                        Toggle("다시 보지 않기", isOn: $dontShowAgain)
+                            .padding(.horizontal)
+                        
+                        Button("확인") {
+                            if dontShowAgain {
+                                UserDefaults.standard.set(true, forKey: "hideNotice")
+                            }
+                            showNotice = false
+                        }
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.blue)
+                        .cornerRadius(10)
+                        .padding(.horizontal)
+                        .padding(.bottom)
+                    }
+                    .background(Color(.systemBackground))
+                    .cornerRadius(16)
+                    .padding(30)
+                    .shadow(radius: 20)
+                }
             }
             .onAppear {
+                if !UserDefaults.standard.bool(forKey: "hideNotice") {
+                        showNotice = true
+                    }
+                
                 if let token = UserDefaults.standard.string(forKey: "jwt_token") {
                     let parts = token.split(separator: ".")
                     if parts.count == 3 {
@@ -134,13 +191,11 @@ struct MainView: View {
                            Date().timeIntervalSince1970 < exp {
                             isLoggedIn = true
                         } else {
-                            // ✅ 만료된 토큰 확실히 삭제
                             UserDefaults.standard.removeObject(forKey: "jwt_token")
                             UserDefaults.standard.synchronize() // 즉시 반영
                             isLoggedIn = false
                         }
                     } else {
-                        // ✅ 잘못된 형식의 토큰도 삭제
                         UserDefaults.standard.removeObject(forKey: "jwt_token")
                         UserDefaults.standard.synchronize()
                         isLoggedIn = false
