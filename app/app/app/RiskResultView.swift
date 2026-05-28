@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct RiskResultView: View {
+    @State private var showInfo = false
+    
     let image: UIImage
     let analyzeResult: AnalyzeResponse
     let onApplyFilter: () -> Void
@@ -12,6 +14,16 @@ struct RiskResultView: View {
         if scorePercent >= 0.7 { return .red }
         if scorePercent >= 0.4 { return .orange }
         return .green
+    }
+    
+    var infoMessage: String {
+        if scorePercent >= 0.7 {
+            return "얼굴이 이미지에서 충분한 크기로 촬영되었고 정면을 향하고 있습니다. 이는 얼굴 인식 모델이 특징점을 정밀하게 추출할 수 있는 조건으로, 딥페이크 생성에 직접 활용될 수 있습니다. FaceShield 보호 적용을 권장합니다."
+        } else if scorePercent >= 0.4 {
+            return "얼굴 크기 또는 각도 중 한 가지 조건이 딥페이크 생성에 불리하게 작용하고 있습니다. 조건이 개선된 다른 사진과 함께 사용될 경우 위험도가 높아질 수 있으므로, 보호 적용을 고려해보세요."
+        } else {
+            return "얼굴 영역이 이미지에서 차지하는 비율이 낮거나, 얼굴이 측면을 향하고 있습니다. 이 경우 얼굴 인식 모델이 특징점을 충분히 추출하기 어려워, 딥페이크 생성에 필요한 조건을 갖추지 못한 상태입니다."
+        }
     }
 
     var body: some View {
@@ -28,8 +40,19 @@ struct RiskResultView: View {
 
                 // 위험도 카드
                 VStack(spacing: 14) {
-                    Text("딥페이크 위험도")
-                        .font(.headline)
+                    HStack {
+                            Spacer()
+                            Text("딥페이크 위험도")
+                                .font(.headline)
+                            Spacer()
+                            Button {
+                                showInfo = true
+                            } label: {
+                                Image(systemName: "info.circle")
+                                    .foregroundColor(.gray)
+                                    .font(.system(size: 18))
+                            }
+                        }
 
                     // 점수 숫자
                     Text(String(format: "%.0f%%", scorePercent * 100))
@@ -57,6 +80,12 @@ struct RiskResultView: View {
                         Text("중간").font(.caption).foregroundColor(.orange)
                         Spacer()
                         Text("높음").font(.caption).foregroundColor(.red)
+                        
+                    }
+                    .alert("위험도 안내", isPresented: $showInfo) {
+                        Button("확인", role: .cancel) {}
+                    } message: {
+                        Text(infoMessage)
                     }
 
                     if analyzeResult.faceCount == 0 {
@@ -71,7 +100,6 @@ struct RiskResultView: View {
                 .cornerRadius(16)
                 .padding(.horizontal)
 
-                // 필터 적용 버튼 (항상 표시)
                 Button(action: onApplyFilter) {
                     HStack {
                         Image(systemName: "sparkles")
